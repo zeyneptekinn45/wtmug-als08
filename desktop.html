@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>P2P Transfer — Bilgisayar</title>
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#0f172a" />
+<!-- QR kod kütüphanesi (CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --border:#334155; --fg:#e2e8f0; --accent:#38bdf8; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); min-height:100vh; }
+  header { padding:16px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  header h1 { margin:0; font-size:18px; font-weight:600; }
+  .badge { padding:4px 10px; border-radius:999px; font-size:12px; background:var(--border); }
+  .badge.ok { background:var(--ok); color:#052e16; }
+  .badge.warn { background:var(--warn); color:#451a03; }
+  .badge.err { background:var(--err); color:#450a0a; }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:16px; padding:24px; max-width:1400px; margin:0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .card h2 { margin:0 0 12px; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8; }
+  textarea { width:100%; height:100px; background:#0b1220; color:var(--fg); border:1px solid var(--border); border-radius:8px; padding:10px; font-family:ui-monospace, Menlo, monospace; font-size:11px; resize:vertical; }
+  button { background:var(--accent); color:#052e16; border:none; padding:10px 16px; border-radius:8px; font-weight:600; cursor:pointer; margin:6px 6px 6px 0; font-size:14px; }
+  button:hover { filter:brightness(1.1); }
+  button:disabled { opacity:0.4; cursor:not-allowed; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
+  button.ok { background:var(--ok); }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:28px; text-align:center; color:#94a3b8; transition:0.15s; cursor:pointer; }
+  .drop.drag { border-color:var(--accent); background:#0b1220; color:var(--accent); }
+  .hint { font-size:12px; color:#94a3b8; margin:8px 0 12px; line-height:1.5; }
+  .progress { height:8px; background:#0b1220; border-radius:999px; overflow:hidden; margin-top:12px; }
+  .progress > div { height:100%; background:var(--accent); width:0%; transition:width 0.2s; }
+  .status { font-size:13px; margin-top:8px; color:#cbd5e1; }
+  .log { font-family:ui-monospace, monospace; font-size:11px; color:#94a3b8; max-height:160px; overflow-y:auto; background:#0b1220; border-radius:8px; padding:8px; margin-top:8px; white-space:pre-wrap; word-break:break-all; }
+  .filelist { margin-top:8px; font-size:13px; }
+  .filelist a { display:block; color:var(--accent); padding:6px 0; text-decoration:none; }
+  .qr-box { display:flex; justify-content:center; padding:16px; background:#fff; border-radius:8px; margin-top:12px; min-height:260px; align-items:center; }
+  .qr-box canvas, .qr-box img { max-width:100%; height:auto; }
+  .qr-empty { color:#64748b; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🖥️ P2P Transfer — Bilgisayar</h1>
+  <span id="connBadge" class="badge">Bağlantı yok</span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1) Teklif Oluştur → Telefonda QR Tara</h2>
+    <p class="hint">Aşağıdaki butona basın. QR kodu telefonunuzun kamerasıyla okutun. Telefon otomatik yanıt üretecek.</p>
+    <button id="btnCreateOffer">🔗 Bağlantı Teklifi Oluştur</button>
+    <div class="qr-box" id="offerQrBox">
+      <span class="qr-empty">Henüz teklif oluşturulmadı</span>
+    </div>
+    <details style="margin-top:12px;">
+      <summary style="cursor:pointer; color:#94a3b8; font-size:13px;">Metin olarak göster (QR çalışmazsa)</summary>
+      <textarea id="offerBox" readonly placeholder="Teklif metni..." style="margin-top:8px;"></textarea>
+      <button class="ghost" id="btnCopyOffer">📋 Kopyala</button>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>2) Telefondaki QR'ı Okut veya Yanıtı Yapıştır</h2>
+    <p class="hint">Telefon ekranındaki QR'ı okutun veya metni aşağıya yapıştırın.</p>
+    <button id="btnScanAnswer" class="ok">📷 QR Tara (Kamera)</button>
+    <video id="scanVideo" style="display:none; width:100%; border-radius:8px; margin-top:10px;" autoplay playsinline muted></video>
+    <textarea id="answerBox" placeholder="Telefondan gelen yanıt metnini buraya yapıştırın..." style="margin-top:10px;"></textarea>
+    <button id="btnAcceptAnswer" class="ok">✅ Yanıtı Uygula ve Bağlan</button>
+    <div class="progress"><div id="connBar"></div></div>
+    <div id="connStatus" class="status">Durum: hazır</div>
+  </section>
+
+  <section class="card" style="grid-column: 1 / -1;">
+    <h2>3) Dosya Transferi</h2>
+    <div id="drop" class="drop">📁 Dosyaları buraya bırakın veya tıklayın</div>
+    <input type="file" id="fileInput" multiple style="display:none" />
+    <div class="progress"><div id="sendBar"></div></div>
+    <div id="sendStatus" class="status">Gönderim: beklemede</div>
+    <h2 style="margin-top:20px;">📥 Gelen Dosyalar</h2>
+    <div id="incoming" class="filelist">Henüz dosya yok.</div>
+    <h2 style="margin-top:20px;">📜 Günlük</h2>
+    <div id="log" class="log"></div>
+  </section>
+</main>
+
+<script>
+/* ============ P2P Transfer — Bilgisayar ============ */
+const RTC_CONFIG = { iceServers: [] };
+const CHUNK_SIZE = 64 * 1024;
+const BUFFER_THRESHOLD = 1024 * 1024;
+
+let pc = null, dc = null;
+let scanStream = null, scanRaf = null;
+
+const $ = (id) => document.getElementById(id);
+function log(msg) {
+  const el = $('log');
+  const t = new Date().toLocaleTimeString('tr-TR');
+  el.textContent += `[${t}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+  console.log(msg);
+}
+function setConn(text, cls='') { const b=$('connBadge'); b.textContent=text; b.className='badge '+cls; }
+function setBar(id,pct){ $(id).style.width=Math.min(100,Math.max(0,pct))+'%'; }
+function fmtBytes(n){ if(n<1024)return n+' B'; if(n<1024*1024)return (n/1024).toFixed(1)+' KB'; if(n<1024*1024*1024)return (n/1024/1024).toFixed(1)+' MB'; return (n/1024/1024/1024).toFixed(2)+' GB'; }
+function cleanup(){ if(dc){try{dc.close()}catch{}dc=null;} if(pc){try{pc.close()}catch{}pc=null;} }
+
+/* ---------- QR göster ---------- */
+async function showQr(text, containerId) {
+  const box = $(containerId);
+  box.innerHTML = '';
+  if (!window.QRCode) {
+    box.innerHTML = '<span class="qr-empty">QR kütüphanesi yüklenemedi (internet yok). Aşağıdaki metni kopyalayın.</span>';
+    return;
+  }
+  const canvas = document.createElement('canvas');
+  box.appendChild(canvas);
+  try {
+    await QRCode.toCanvas(canvas, text, { width: 320, margin: 1, errorCorrectionLevel: 'L' });
+    log('QR kod hazır (' + text.length + ' karakter)');
+  } catch (e) {
+    box.innerHTML = '<span class="qr-empty">QR oluşturulamadı: ' + e.message + '</span>';
+    log('QR hata: ' + e.message);
+  }
+}
+
+/* ---------- QR tara ---------- */
+function stopScan() {
+  if (scanRaf) { cancelAnimationFrame(scanRaf); scanRaf = null; }
+  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+  $('scanVideo').style.display = 'none';
+}
+
+$('btnScanAnswer').onclick = async () => {
+  stopScan();
+  if (!('BarcodeDetector' in window)) {
+    alert('Bu tarayıcı QR taramayı desteklemiyor (BarcodeDetector API yok).\n\nLütfen telefondaki metni kopyalayıp aşağıdaki kutuya yapıştırın.');
+    return;
+  }
+  try {
+    log('Kamera açılıyor...');
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const video = $('scanVideo');
+    video.srcObject = scanStream;
+    video.style.display = 'block';
+
+    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const tick = async () => {
+      if (!scanStream) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        try {
+          const codes = await detector.detect(canvas);
+          if (codes.length > 0) {
+            const val = codes[0].rawValue;
+            log('QR okundu (' + val.length + ' karakter)');
+            $('answerBox').value = val;
+            stopScan();
+            $('btnAcceptAnswer').click();
+            return;
+          }
+        } catch (e) { /* yut */ }
+      }
+      scanRaf = requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (e) {
+    log('Kamera hatası: ' + e.message);
+    alert('Kamera açılamadı: ' + e.message);
+  }
+};
+
+/* ---------- 1) Teklif oluştur ---------- */
+$('btnCreateOffer').onclick = async () => {
+  try {
+    cleanup();
+    log('Teklif oluşturuluyor...');
+    pc = new RTCPeerConnection(RTC_CONFIG);
+
+    dc = pc.createDataChannel('transfer', { ordered: true });
+    setupDataChannel(dc);
+
+    pc.oniceconnectionstatechange = () => {
+      log('ICE state: ' + pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        setConn('Bağlı ✓', 'ok'); setBar('connBar', 100);
+        $('connStatus').textContent = 'Durum: bağlı';
+      } else if (pc.iceConnectionState === 'failed') {
+        setConn('Bağlantı başarısız', 'err');
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc, 3000);
+
+    const text = JSON.stringify(pc.localDescription);
+    $('offerBox').value = text;
+    await showQr(text, 'offerQrBox');
+    setConn('Teklif hazır → QR tara', 'warn');
+    log('Teklif hazır. Telefonda QR okutun.');
+  } catch (e) {
+    log('HATA: ' + e.message);
+  }
+};
+
+$('btnCopyOffer').onclick = async () => {
+  const t = $('offerBox').value; if (!t) return;
+  try { await navigator.clipboard.writeText(t); log('Kopyalandı'); } catch { $('offerBox').select(); document.execCommand('copy'); }
+};
+
+/* ---------- 2) Yanıt uygula ---------- */
+$('btnAcceptAnswer').onclick = async () => {
+  try {
+    const raw = $('answerBox').value.trim();
+    if (!raw) return alert('Önce telefondan gelen yanıtı yapıştırın veya QR okutun.');
+    if (!pc) return alert('Önce teklif oluşturun.');
+    const answer = JSON.parse(raw);
+    if (answer.type !== 'answer') return alert('Bu bir "answer" değil, type=' + answer.type);
+    await pc.setRemoteDescription(answer);
+    log('Yanıt uygulandı, bağlantı kuruluyor...');
+  } catch (e) {
+    log('Yanıt hatası: ' + e.message);
+    alert('Yanıt uygulanamadı: ' + e.message);
+  }
+};
+
+function waitForIce(peer, timeout=3000) {
+  return new Promise(resolve => {
+    if (peer.iceGatheringState === 'complete') return resolve();
+    const t = setTimeout(resolve, timeout);
+    peer.addEventListener('icegatheringstatechange', () => {
+      if (peer.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+    });
+  });
+}
+
+/* ---------- DataChannel ---------- */
+function setupDataChannel(ch) {
+  ch.binaryType = 'arraybuffer';
+
+  ch.onopen = () => {
+    log('✅ DataChannel açıldı');
+    setConn('Bağlı ✓', 'ok'); setBar('connBar', 100);
+    $('connStatus').textContent = 'Durum: bağlı';
+  };
+  ch.onclose = () => { log('DataChannel kapandı'); setConn('Bağlantı kapandı', 'warn'); };
+  ch.onerror = e => log('DC hata: ' + (e.message||e));
+
+  let incomingMeta = null, receivedChunks = [], receivedBytes = 0;
+
+  ch.onmessage = (ev) => {
+    const data = ev.data;
+    if (typeof data === 'string') {
+      let msg; try { msg = JSON.parse(data); } catch { return; }
+      if (msg.type === 'file-start') {
+        incomingMeta = msg; receivedChunks = []; receivedBytes = 0;
+        log('Dosya geliyor: ' + msg.name + ' (' + fmtBytes(msg.size) + ')');
+      } else if (msg.type === 'file-end') {
+        const blob = new Blob(receivedChunks, { type: incomingMeta.mime || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = incomingMeta.name;
+        a.textContent = '⬇ ' + incomingMeta.name + ' (' + fmtBytes(blob.size) + ')';
+        $('incoming').innerHTML = ''; $('incoming').appendChild(a);
+        log('Dosya alındı: ' + incomingMeta.name);
+        incomingMeta = null; receivedChunks = [];
+      }
+    } else {
+      receivedChunks.push(data); receivedBytes += data.byteLength;
+      if (incomingMeta) {
+        setBar('sendBar', (receivedBytes/incomingMeta.size)*100);
+        $('sendStatus').textContent = 'Alınıyor: ' + fmtBytes(receivedBytes) + ' / ' + fmtBytes(incomingMeta.size);
+      }
+    }
+  };
+}
+
+/* ---------- 3) Dosya gönder ---------- */
+$('drop').onclick = () => $('fileInput').click();
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('drag'); };
+$('drop').ondragleave = () => $('drop').classList.remove('drag');
+$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('drag'); if (e.dataTransfer.files.length) sendFiles(e.dataTransfer.files); };
+$('fileInput').onchange = e => { if (e.target.files.length) sendFiles(e.target.files); e.target.value=''; };
+
+async function sendFiles(files) {
+  if (!dc || dc.readyState !== 'open') return alert('Önce bağlantı kurun.');
+  for (const f of files) await sendFile(f);
+}
+async function sendFile(file) {
+  log('Gönderiliyor: ' + file.name + ' (' + fmtBytes(file.size) + ')');
+  dc.send(JSON.stringify({ type:'file-start', name:file.name, size:file.size, mime:file.type }));
+  let offset = 0;
+  const reader = file.stream().getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    while (dc.bufferedAmount > BUFFER_THRESHOLD) await new Promise(r => setTimeout(r, 30));
+    for (let i = 0; i < value.byteLength; i += CHUNK_SIZE) {
+      const chunk = value.slice(i, Math.min(i+CHUNK_SIZE, value.byteLength));
+      dc.send(chunk); offset += chunk.byteLength;
+      setBar('sendBar', (offset/file.size)*100);
+      $('sendStatus').textContent = 'Gönderiliyor: ' + fmtBytes(offset) + ' / ' + fmtBytes(file.size);
+    }
+  }
+  dc.send(JSON.stringify({ type:'file-end' }));
+  log('Gönderim tamam: ' + file.name);
+  $('sendStatus').textContent = 'Tamamlandı: ' + file.name;
+}
+
+/* ---------- Başlangıç ---------- */
+log('Sayfa yüklendi. RTCPeerConnection: ' + (typeof RTCPeerConnection !== 'undefined'));
+log('QRCode kütüphanesi: ' + (typeof QRCode !== 'undefined' ? 'yüklendi ✓' : 'YÜKLENEMEDİ'));
+log('BarcodeDetector (QR tarama): ' + ('BarcodeDetector' in window ? 'destekliyor ✓' : 'desteklemiyor'));
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+</script>
+</body>
+</html>
